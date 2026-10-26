@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS = {
   startDate: '2026-01-01', startBalanceMin: 0,
   rates: Calc.DEFAULT_RATES.map(r => ({ ...r })),
 };
-const state = { entries: [], settings: { ...DEFAULT_SETTINGS }, tab: 'month', month: ymOf(todayStr()), year: +todayStr().slice(0, 4) };
+const state = { entries: [], settings: { ...DEFAULT_SETTINGS }, tab: 'month', month: Calc.periodOf(todayStr()), year: +todayStr().slice(0, 4) };
 
 async function load() {
   state.entries = await dbAll();
@@ -58,7 +58,6 @@ const saveSettings = () => kvSet('settings', state.settings);
 // ---------- Hilfsfunktionen ----------
 function todayStr() { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function pad(n) { return String(n).padStart(2, '0'); }
-function ymOf(date) { return date.slice(0, 7); }
 function dateFromStr(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
 function fmtDur(min) {
   const neg = min < 0; min = Math.round(Math.abs(min));
@@ -68,7 +67,6 @@ const eurFmt = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EU
 const fmtEur = v => eurFmt.format(v);
 const dayFmt = new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
 const fmtDay = s => dayFmt.format(dateFromStr(s));
-const ymLabel = ym => `${MONTHS[+ym.slice(5) - 1]} ${ym.slice(0, 4)}`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
@@ -95,10 +93,12 @@ function toast(msg) {
 }
 function overlay(on, text) { $('#overlay').classList.toggle('open', on); if (text) $('#overlayText').textContent = text; }
 
-function months() {
-  const end = [state.month, `${state.year}-12`, ymOf(todayStr())].sort().pop();
-  return Calc.computeMonths(state.entries, state.settings, end);
+function periods() {
+  const end = [state.month, `${state.year}-12`, Calc.periodOf(todayStr())].sort().pop();
+  return Calc.computePeriods(state.entries, state.settings, end);
 }
+const shortDay = s => `${s.slice(8, 10)}.${s.slice(5, 7)}.`;
+const payLabel = key => `15. ${MONTHS[+key.slice(5) - 1]} ${key.slice(0, 4)}`;
 
 // ---------- Ansichten ----------
 function render() {
@@ -110,62 +110,73 @@ function render() {
   else v.innerHTML = viewSettings();
 }
 
-function viewMonth() {
-  const ym = state.month;
-  const m = months().find(x => x.ym === ym);
-  const list = state.entries.filter(e => ymOf(e.date) === ym)
-    .sort((a, b) => (b.date + b.start).localeCompare(a.date + a.start));
-  let summary;
-  if (!m) {
-    const worked = list.reduce((s, e) => s + Calc.entryMinutes(e), 0);
-    summary = `<div class="card"><div class="muted">Dieser Monat liegt vor dem Startdatum in den Einstellungen.</div>
-      <div class="kpi">${fmtDur(worked)} Std. gearbeitet</div></div>`;
-  } else {
-    const pct = Math.min(100, m.available / m.capMin * 100);
-    summary = `
-    <div class="card">
-      <div class="kpi-label">Auszahlung für ${MONTHS[+ym.slice(5) - 1]}</div>
-      <div class="big">${fmtEur(m.pay)}</div>
-      <div class="progress ${m.available > m.capMin ? 'over' : ''}"><div style="width:${pct}%"></div></div>
-      <div class="row muted"><span>${fmtDur(m.paidMin)} von ${fmtDur(m.capMin)} Std. bezahlt</span><span>Grenze ${fmtEur(m.limit)}</span></div>
-    </div>
-    <div class="grid2">
-      <div class="card"><div class="kpi-label">Gearbeitet</div><div class="kpi">${fmtDur(m.worked)}</div><div class="muted">${fmtEur(m.earned)} verdient</div></div>
-      <div class="card"><div class="kpi-label">Noch frei bis Grenze</div><div class="kpi">${fmtDur(m.freeMin)}</div><div class="muted">Std. à ${fmtEur(m.wage)}</div></div>
-      <div class="card"><div class="kpi-label">Guthaben aus Vormonat</div><div class="kpi">${fmtDur(m.carryIn)}</div></div>
-      <div class="card"><div class="kpi-label">Übertrag in Folgemonat</div><div class="kpi" style="color:${m.carryOut > 0 ? 'var(--warn)' : 'inherit'}">${fmtDur(m.carryOut)}</div></div>
-    </div>`;
-  }
-  const items = list.length ? list.map(e => {
-    const corrected = e.correctionMin || (e.origStart && (e.origStart !== e.start || e.origEnd !== e.end));
-    return `<div class="item" data-edit="${e.id}">
-      ${e.photo ? `<img src="${e.photo}" alt="">` : `<div class="ph">ohne<br>Foto</div>`}
-      <div class="main"><div>${fmtDay(e.date)}${corrected ? '<span class="badge">korrigiert</span>' : ''}</div>
-        <div class="muted">${e.start || '–'}–${e.end || '–'}${e.correctionMin ? ` · Korr. ${e.correctionMin > 0 ? '+' : ''}${fmtDur(e.correctionMin)}` : ''}${e.note ? ' · ' + esc(e.note) : ''}</div></div>
-      <div class="dur">${fmtDur(Calc.entryMinutes(e))}</div></div>`;
-  }).join('') : `<div class="empty">Noch keine Einträge in diesem Monat.<br>Tippe auf die Kamera, um ein Foto aufzunehmen.</div>`;
+// Eine Zeile in der Zahlungsansicht: ein Arbeitstag (ganz oder anteilig) oder das Startguthaben.
+function chunkHtml(c, carried) {
+  if (c.startBalance) return `<div class="item"><div class="ph">Start</div>
+    <div class="main"><div>Startguthaben${c.split ? '<span class="badge">teilweise</span>' : ''}</div><div class="muted">Stand ${fmtDay(c.date)}</div></div>
+    <div class="dur">${fmtDur(c.min)}</div></div>`;
+  const e = state.entries.find(x => x.id === c.entryId);
+  if (!e) return '';
+  const corrected = e.correctionMin || (e.origStart && (e.origStart !== e.start || e.origEnd !== e.end));
+  const badges = (c.fromCarry ? '<span class="badge info">Übertrag</span>' : '')
+    + (c.split ? `<span class="badge">${carried ? 'Rest' : 'teilweise'}</span>` : '')
+    + (corrected ? '<span class="badge">korrigiert</span>' : '');
+  return `<div class="item" data-edit="${e.id}">
+    ${e.photo ? `<img src="${e.photo}" alt="">` : `<div class="ph">ohne<br>Foto</div>`}
+    <div class="main"><div>${fmtDay(e.date)}${badges}</div>
+      <div class="muted">${e.start || '–'}–${e.end || '–'}${e.correctionMin ? ` · Korr. ${e.correctionMin > 0 ? '+' : ''}${fmtDur(e.correctionMin)}` : ''}${e.note ? ' · ' + esc(e.note) : ''}</div></div>
+    <div class="dur">${fmtDur(c.min)}${c.split ? `<div class="muted" style="font-weight:400">von ${fmtDur(c.total)}</div>` : ''}</div></div>`;
+}
 
-  return `
-  <div class="monthnav"><button data-month="-1" aria-label="Vormonat">‹</button><div class="title">${ymLabel(ym)}</div><button data-month="1" aria-label="Folgemonat">›</button></div>
-  ${summary}
-  <div class="row"><h2>Einträge (${list.length})</h2><button class="btn small secondary" data-action="manual">+ ohne Foto</button></div>
-  <div class="list">${items}</div>`;
+function viewMonth() {
+  const key = state.month;
+  const p = periods().find(x => x.key === key);
+  const r = Calc.periodRange(key);
+  const nav = `<div class="monthnav"><button data-month="-1" aria-label="Vorherige Zahlung">‹</button>
+    <div style="text-align:center"><div class="title">${payLabel(key)}</div><div class="muted">Zahlung für ${shortDay(r.from)}–${shortDay(r.to)}${r.to.slice(0, 4)}</div></div>
+    <button data-month="1" aria-label="Nächste Zahlung">›</button></div>`;
+  const manualBtn = '<button class="btn small secondary" data-action="manual">+ ohne Foto</button>';
+  if (!p) {
+    const list = state.entries.filter(e => Calc.periodOf(e.date) === key);
+    return `${nav}<div class="card"><div class="muted">Dieser Zeitraum liegt vor dem Startdatum in den Einstellungen (${fmtDay(state.settings.startDate)}) und wird nicht berechnet.</div></div>
+      <div class="row"><h2>Einträge (${list.length})</h2>${manualBtn}</div>
+      <div class="list">${list.map(e => chunkHtml({ entryId: e.id, min: Calc.entryMinutes(e) })).join('') || '<div class="empty">Keine Einträge.</div>'}</div>`;
+  }
+  const pct = Math.min(100, p.available / p.capMin * 100);
+  const nextKey = Calc.addMonth(key, 1);
+  const status = p.payDate <= todayStr() ? 'Ausgezahlt' : 'Voraussichtlich';
+  return `${nav}
+  <div class="card">
+    <div class="kpi-label">${status} am ${shortDay(p.payDate)}${p.payDate.slice(0, 4)}${p.payDate > todayStr() && todayStr() >= p.from ? ' · Zeitraum läuft noch' : ''}</div>
+    <div class="big">${fmtEur(p.pay)}</div>
+    <div class="progress ${p.available > p.capMin ? 'over' : ''}"><div style="width:${pct}%"></div></div>
+    <div class="row muted"><span>${fmtDur(p.paidMin)} von ${fmtDur(p.capMin)} Std. bezahlt</span><span>Grenze ${fmtEur(p.limit)}</span></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><div class="kpi-label">Gearbeitet im Zeitraum</div><div class="kpi">${fmtDur(p.worked)}</div><div class="muted">${fmtEur(p.earned)} verdient</div></div>
+    <div class="card"><div class="kpi-label">Noch frei bis Grenze</div><div class="kpi">${fmtDur(p.freeMin)}</div><div class="muted">Std. à ${fmtEur(p.wage)}</div></div>
+    <div class="card"><div class="kpi-label">Übertrag aus letzter Zahlung</div><div class="kpi">${fmtDur(p.carryIn)}</div></div>
+    <div class="card"><div class="kpi-label">Geht in Zahlung ${shortDay(nextKey + '-15')}</div><div class="kpi" style="color:${p.carryOut > 0 ? 'var(--warn)' : 'inherit'}">${fmtDur(p.carryOut)}</div></div>
+  </div>
+  <div class="row"><h2>Bezahlt am 15.</h2>${manualBtn}</div>
+  <div class="list">${p.paid.map(c => chunkHtml(c, false)).join('') || '<div class="empty">Noch keine Stunden in diesem Zeitraum.<br>Tippe auf die Kamera, um ein Foto aufzunehmen.</div>'}</div>
+  ${p.carried.length ? `<h2>Fällt in die Zahlung am ${fmtDay(nextKey + '-15')}</h2>
+  <div class="list">${p.carried.map(c => chunkHtml(c, true)).join('')}</div>` : ''}`;
 }
 
 function viewYear() {
   const y = String(state.year);
-  const all = months();
-  const ms = all.filter(m => m.ym.startsWith(y));
-  const today = ymOf(todayStr());
-  const done = ms.filter(m => m.ym <= today);
+  const ms = periods().filter(m => m.key.startsWith(y));
+  const today = todayStr();
+  const done = ms.filter(m => m.payDate <= today);
   const sum = k => ms.reduce((s, m) => s + m[k], 0);
   const paidSoFar = done.reduce((s, m) => s + m.pay, 0);
   const activeMonths = done.filter(m => m.worked > 0 || m.pay > 0).length;
   const projection = activeMonths ? paidSoFar / activeMonths * 12 : 0;
   const yearLimit = ms.reduce((s, m) => s + m.limit, 0);
 
-  const rows = ms.map(m => `<tr class="clickable${m.ym > today ? ' future' : ''}" data-goto="${m.ym}">
-    <td>${MONTHS_SHORT[+m.ym.slice(5) - 1]}</td><td>${fmtDur(m.worked)}</td><td>${fmtDur(m.paidMin)}</td>
+  const rows = ms.map(m => `<tr class="clickable${m.payDate > today ? ' future' : ''}" data-goto="${m.key}">
+    <td>15. ${MONTHS_SHORT[+m.key.slice(5) - 1]}</td><td>${fmtDur(m.worked)}</td><td>${fmtDur(m.paidMin)}</td>
     <td>${fmtEur(m.pay)}</td><td style="color:${m.carryOut > 0 ? 'var(--warn)' : 'inherit'}">${fmtDur(m.carryOut)}</td></tr>`).join('');
 
   return `
@@ -177,19 +188,19 @@ function viewYear() {
     <div class="card"><div class="kpi-label">Gearbeitet ${y}</div><div class="kpi">${fmtDur(sum('worked'))}</div></div>
     <div class="card"><div class="kpi-label">Stundenkonto aktuell</div><div class="kpi">${fmtDur((done[done.length - 1] || ms[ms.length - 1]).carryOut)}</div></div>
   </div>
-  <h2>Stunden pro Monat</h2>
+  <h2>Stunden pro Zahlung</h2>
   <div class="card chart">${chartHours(ms)}
     <div class="legend"><span><i style="background:var(--accent)"></i>gearbeitet</span><span><i style="background:var(--bar2)"></i>bezahlt</span><span><i style="background:var(--warn);height:2px"></i>Grenze</span></div></div>
-  <h2>Auszahlung pro Monat</h2>
+  <h2>Auszahlung am 15.</h2>
   <div class="card chart">${chartPay(ms)}</div>
   <h2>Verlauf Stundenkonto</h2>
   <div class="card chart">${chartBalance(ms)}</div>
   <h2>Tabelle</h2>
   <div class="card tablewrap"><table>
-    <tr><th>Monat</th><th>Gearb.</th><th>Bezahlt</th><th>Auszahlung</th><th>Konto</th></tr>
+    <tr><th>Zahlung</th><th>Gearb.</th><th>Bezahlt</th><th>Auszahlung</th><th>Konto</th></tr>
     ${rows}
-    <tr class="sum"><td>Summe${ms.some(m => m.ym > today) ? '*' : ''}</td><td>${fmtDur(sum('worked'))}</td><td>${fmtDur(sum('paidMin'))}</td><td>${fmtEur(sum('pay'))}</td><td></td></tr>
-  </table>${ms.some(m => m.ym > today) ? '<div class="muted" style="margin-top:8px">* Graue Zeilen sind eine Prognose: So würde das vorhandene Guthaben in den kommenden Monaten ausbezahlt.</div>' : ''}</div>` : `<div class="card empty">Für ${y} gibt es noch keine Daten (Startdatum: ${fmtDay(state.settings.startDate)}).</div>`}`;
+    <tr class="sum"><td>Summe${ms.some(m => m.payDate > today) ? '*' : ''}</td><td>${fmtDur(sum('worked'))}</td><td>${fmtDur(sum('paidMin'))}</td><td>${fmtEur(sum('pay'))}</td><td></td></tr>
+  </table>${ms.some(m => m.payDate > today) ? '<div class="muted" style="margin-top:8px">* Graue Zeilen sind noch nicht ausgezahlt: laufender Zeitraum und Prognose, wie das vorhandene Guthaben in den kommenden Zahlungen ausbezahlt würde.</div>' : ''}</div>` : `<div class="card empty">Für ${y} gibt es noch keine Daten (Startdatum: ${fmtDay(state.settings.startDate)}).</div>`}`;
 }
 
 // ---------- Diagramme (SVG) ----------
@@ -204,7 +215,7 @@ function axis(maxV, fmt) {
   return out;
 }
 function xLabels(ms, step) {
-  return ms.map((m, i) => `<text x="${PL + step * i + step / 2}" y="${CH - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${MONTHS_SHORT[+m.ym.slice(5) - 1].slice(0, 1)}</text>`).join('');
+  return ms.map((m, i) => `<text x="${PL + step * i + step / 2}" y="${CH - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${MONTHS_SHORT[+m.key.slice(5) - 1].slice(0, 1)}</text>`).join('');
 }
 function chartHours(ms) {
   const max = Math.max(60, ...ms.map(m => Math.max(m.worked, m.capMin))) / 60;
@@ -214,7 +225,7 @@ function chartHours(ms) {
   ms.forEach((m, i) => {
     const x = PL + step * i + step * 0.14;
     const hw = m.worked / 60, hp = m.paidMin / 60;
-    bars += `<rect x="${x}" y="${y(hw)}" width="${bw}" height="${ih * hw / top}" rx="2" fill="var(--accent)"><title>${MONTHS[+m.ym.slice(5) - 1]}: ${fmtDur(m.worked)} gearbeitet</title></rect>
+    bars += `<rect x="${x}" y="${y(hw)}" width="${bw}" height="${ih * hw / top}" rx="2" fill="var(--accent)"><title>${MONTHS[+m.key.slice(5) - 1]}: ${fmtDur(m.worked)} gearbeitet</title></rect>
       <rect x="${x + bw + 1}" y="${y(hp)}" width="${bw}" height="${ih * hp / top}" rx="2" fill="var(--bar2)"><title>${fmtDur(m.paidMin)} bezahlt</title></rect>`;
   });
   const capPath = ms.map((m, i) => `${i ? 'L' : 'M'}${PL + step * i},${y(m.capMin / 60)}H${PL + step * (i + 1)}`).join('');
@@ -223,7 +234,7 @@ function chartHours(ms) {
 }
 function chartPay(ms) {
   const top = Math.ceil(Math.max(100, ...ms.map(m => m.limit)) / 100) * 100, ih = CH - PB - PT, step = (CW - PL) / ms.length, bw = step * 0.6;
-  const bars = ms.map((m, i) => `<rect x="${PL + step * i + step * 0.2}" y="${PT + ih - ih * m.pay / top}" width="${bw}" height="${ih * m.pay / top}" rx="3" fill="var(--accent)"><title>${MONTHS[+m.ym.slice(5) - 1]}: ${fmtEur(m.pay)}</title></rect>`).join('');
+  const bars = ms.map((m, i) => `<rect x="${PL + step * i + step * 0.2}" y="${PT + ih - ih * m.pay / top}" width="${bw}" height="${ih * m.pay / top}" rx="3" fill="var(--accent)"><title>${MONTHS[+m.key.slice(5) - 1]}: ${fmtEur(m.pay)}</title></rect>`).join('');
   return `<svg viewBox="0 0 ${CW} ${CH}" role="img" aria-label="Auszahlung pro Monat">${axis(top, v => Math.round(v) + ' €')}${bars}${xLabels(ms, step)}</svg>`;
 }
 function chartBalance(ms) {
@@ -231,7 +242,7 @@ function chartBalance(ms) {
   const pts = ms.map((m, i) => [PL + step * i + step / 2, PT + ih - ih * (m.carryOut / 60) / top]);
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0]},${p[1]}`).join('');
   const area = `${line}L${pts[pts.length - 1][0]},${PT + ih}L${pts[0][0]},${PT + ih}Z`;
-  const dots = pts.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="var(--warn)"><title>Ende ${MONTHS[+ms[i].ym.slice(5) - 1]}: ${fmtDur(ms[i].carryOut)} Std.</title></circle>`).join('');
+  const dots = pts.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="var(--warn)"><title>Ende ${MONTHS[+ms[i].key.slice(5) - 1]}: ${fmtDur(ms[i].carryOut)} Std.</title></circle>`).join('');
   return `<svg viewBox="0 0 ${CW} ${CH}" role="img" aria-label="Verlauf Stundenkonto">${axis(top, v => v + ' h')}
     <path d="${area}" fill="var(--warn)" opacity=".15"/><path d="${line}" stroke="var(--warn)" stroke-width="2" fill="none"/>${dots}${xLabels(ms, step)}</svg>`;
 }
@@ -258,7 +269,7 @@ function viewSettings() {
   </div>
   <h2>Startwerte</h2>
   <div class="card">
-    <label class="field"><span>Rechnen ab Datum</span><input type="date" id="startDate" value="${s.startDate}"></label>
+    <label class="field"><span>Rechnen ab Datum (am besten ein 16., dem Beginn eines Zahlungszeitraums)</span><input type="date" id="startDate" value="${s.startDate}"></label>
     <label class="field"><span>Stundenguthaben zu diesem Datum (Std:Min)</span>
       <input type="text" inputmode="numbers-and-punctuation" id="startBalance" value="${fmtDur(s.startBalanceMin)}" placeholder="0:00"></label>
   </div>
@@ -308,7 +319,7 @@ function openEditor(entry, opts = {}) {
   $('#sheet')._photo = entry.photo;
   const upd = () => {
     const min = Calc.entryMinutes({ start: $('#fStart').value, end: $('#fEnd').value, correctionMin: parseDur($('#fCorr').value) });
-    const r = Calc.rateFor(state.settings.rates, ymOf($('#fDate').value || todayStr()));
+    const r = Calc.rateFor(state.settings.rates, Calc.periodOf($('#fDate').value || todayStr()));
     $('#fSum').textContent = `${fmtDur(min)} Std. · ${fmtEur(min / 60 * r.wage)}`;
   };
   ['fStart', 'fEnd', 'fCorr', 'fDate'].forEach(id => $('#' + id).addEventListener('input', () => { $('#' + id).classList.remove('uncertain'); upd(); }));
@@ -327,7 +338,7 @@ async function saveEntryFromSheet() {
   await dbPut(e);
   const i = state.entries.findIndex(x => x.id === e.id);
   if (i >= 0) state.entries[i] = e; else state.entries.push(e);
-  state.month = ymOf(e.date);
+  state.month = Calc.periodOf(e.date);
   toast('Gespeichert');
   nextInQueue();
 }
@@ -572,7 +583,8 @@ document.addEventListener('click', async ev => {
   const s = state.settings;
   switch (t.dataset.action) {
     case 'manual': {
-      const d = state.month === ymOf(todayStr()) ? todayStr() : state.month + '-01';
+      const pr = Calc.periodRange(state.month), t = todayStr();
+      const d = t >= pr.from && t <= pr.to ? t : pr.from;
       editQueue = []; openEditor({ id: uid(), date: d, start: '', end: '', correctionMin: 0, note: '', createdAt: Date.now() }); break;
     }
     case 'save-entry': await saveEntryFromSheet(); break;

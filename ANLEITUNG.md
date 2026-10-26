@@ -60,14 +60,23 @@ Der API-Schlüssel steht aus Sicherheitsgründen nicht in der Sicherung und muss
 
 ## So rechnet die App
 
-Pro Monat: **Guthaben aus Vormonat + gearbeitete Stunden**.
-Davon wird höchstens bis zur Minijob-Grenze ausbezahlt (2026: 603 € = 43:23 Std.).
-Der Rest wird in den nächsten Monat übertragen.
+Gezahlt wird jeweils **am 15.** Mit der Zahlung am 15. November werden die Arbeitstage vom **16. Oktober bis 15. November** bezahlt.
 
-Beispiel: Im Oktober 50 Std. gearbeitet: 603 € ausbezahlt, 6:37 Std. Übertrag.
-Im November 35 Std. gearbeitet: 35 + 6:37 = 41:37 Std. → 578,50 €, Konto wieder 0.
+Pro Zahlung: **Übertrag aus der letzten Zahlung + gearbeitete Stunden im Zeitraum**.
+Davon wird höchstens bis zur Minijob-Grenze ausbezahlt (2026: 603 € = 43:23 Std.). Die ältesten Stunden kommen zuerst dran.
+Was nicht mehr passt, fällt in die nächste Zahlung.
+
+In der Ansicht „Monat“ siehst du pro Zahlung:
+- **Bezahlt am 15.**: jeden Arbeitstag, der mit dieser Zahlung bezahlt wird. „Übertrag“ heißt, der Tag stammt aus einem früheren Zeitraum.
+- **Fällt in die Zahlung am …**: die Tage bzw. Stunden, die erst mit der nächsten Zahlung kommen.
+- Ein Tag, der die Grenze überschreitet, wird aufgeteilt, z. B. „3:19 von 4:30“ bezahlt und „1:11 von 4:30“ als Rest in der nächsten Zahlung.
+
+Beispiel: Vom 16.10. bis 15.11. 50 Std. gearbeitet: Am 15.11. kommen 603 €, 6:37 Std. gehen in die nächste Zahlung.
+Vom 16.11. bis 15.12. 35 Std. gearbeitet: 35 + 6:37 = 41:37 Std. Am 15.12. kommen also 578,50 €, danach ist das Konto wieder bei 0.
+
+**Tipp:** Stelle in den Einstellungen „Rechnen ab Datum“ auf einen 16., z. B. 16.12.2025. Trage als Startguthaben die Stunden ein, die zu diesem Tag noch offen waren.
 
 ## Später etwas ändern
 
 Geänderte Dateien wieder auf GitHub hochladen („Add file → Upload files“).
-Danach in `sw.js` die Zeile `const VERSION = 'v1'` auf `'v2'` usw. erhöhen, damit das iPhone die neue Version lädt.
+Die Versionsnummer in `sw.js` (`const VERSION = 'v2'`) ist bei jeder neuen Fassung schon erhöht. Danach die App auf dem iPhone einmal schließen und neu öffnen, ggf. zweimal.

@@ -1,4 +1,4 @@
-// Rechenlogik: Arbeitsminuten, Stundenkonto und Auszahlung pro Monat.
+// Rechenlogik: Arbeitsminuten, Stundenkonto und Auszahlung je Zahlung am 15.
 // Läuft im Browser (window.Calc) und in Node (module.exports) für Tests.
 (function (root) {
   const DEFAULT_RATES = [
@@ -40,44 +40,67 @@
     return `${y}-${String(m).padStart(2, '0')}`;
   }
 
-  // Berechnet alle Monate von startMonth bis endMonth.
-  // Regel: verfügbar = Guthaben + Monatsstunden; bezahlt wird höchstens die Minijob-Grenze,
-  // der Rest wird als Guthaben in den Folgemonat übertragen.
-  function computeMonths(entries, settings, endMonth) {
-    const rates = settings.rates && settings.rates.length ? settings.rates : DEFAULT_RATES;
-    const startMonth = (settings.startDate || '2026-01-01').slice(0, 7);
-    const byMonth = {};
-    for (const e of entries) {
-      const ym = e.date.slice(0, 7);
-      byMonth[ym] = (byMonth[ym] || 0) + entryMinutes(e);
-    }
-    const lastEntry = Object.keys(byMonth).sort().pop();
-    let end = endMonth;
-    if (lastEntry && lastEntry > end) end = lastEntry;
+  // Zahlung am 15. eines Monats für die Arbeitstage vom 16. des Vormonats bis zum 15.
+  // Schlüssel einer Periode ist der Zahlungsmonat (YYYY-MM).
+  function periodOf(date) {
+    const ym = date.slice(0, 7);
+    return +date.slice(8, 10) <= 15 ? ym : addMonth(ym, 1);
+  }
+  function periodRange(key) {
+    return { from: addMonth(key, -1) + '-16', to: key + '-15', payDate: key + '-15' };
+  }
 
+  // Berechnet alle Zahlungen ab der Periode des Startdatums bis endKey.
+  // Regel: Übertrag (älteste Stunden zuerst) + Stunden der Periode werden bis zur
+  // Minijob-Grenze bezahlt; was nicht mehr passt, geht in die nächste Zahlung.
+  // paid/carried listen pro Arbeitstag auf, welche Minuten bezahlt bzw. übertragen werden.
+  function computePeriods(entries, settings, endKey) {
+    const rates = settings.rates && settings.rates.length ? settings.rates : DEFAULT_RATES;
+    const startDate = settings.startDate || '2026-01-01';
+    const byPeriod = {};
+    for (const e of entries) {
+      if (!e.date || e.date < startDate) continue;
+      (byPeriod[periodOf(e.date)] = byPeriod[periodOf(e.date)] || []).push(e);
+    }
+    const lastKey = Object.keys(byPeriod).sort().pop();
+    let end = endKey;
+    if (lastKey && lastKey > end) end = lastKey;
+
+    let carry = settings.startBalanceMin > 0
+      ? [{ entryId: null, date: startDate, min: settings.startBalanceMin, total: settings.startBalanceMin, startBalance: true }]
+      : [];
     const result = [];
-    let balance = (settings.startBalanceMin || 0);
-    for (let ym = startMonth; ym <= end; ym = addMonth(ym, 1)) {
-      const r = rateFor(rates, ym);
-      const worked = byMonth[ym] || 0;
-      const available = balance + worked;
+    for (let key = periodOf(startDate); key <= end; key = addMonth(key, 1)) {
+      const r = rateFor(rates, key);
       const capMin = r.limit / r.wage * 60;
-      const paidMin = Math.min(available, capMin);
-      const pay = Math.round(paidMin / 60 * r.wage * 100) / 100;
-      const carryIn = balance;
-      balance = available - paidMin;
-      if (balance < 1e-6) balance = 0;
+      const own = (byPeriod[key] || []).slice()
+        .sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')))
+        .map(e => ({ entryId: e.id, date: e.date, start: e.start, end: e.end, min: entryMinutes(e), total: entryMinutes(e) }));
+      const carryIn = carry.reduce((s, c) => s + c.min, 0);
+      const worked = own.reduce((s, c) => s + c.min, 0);
+      const paid = [], carried = [];
+      let left = capMin;
+      for (const c of [...carry.map(c => ({ ...c, fromCarry: true })), ...own]) {
+        const take = Math.min(c.min, left);
+        left -= take;
+        const rest = c.min - take;
+        if (take > 1e-6 || c.min === 0) paid.push({ ...c, min: take, split: rest > 1e-6 });
+        if (rest > 1e-6) carried.push({ ...c, min: rest, split: take > 1e-6, fromCarry: false, fromKey: c.fromKey || key });
+      }
+      const paidMin = capMin - left;
+      const carryOut = carried.reduce((s, c) => s + c.min, 0);
       result.push({
-        ym, worked, carryIn, available, paidMin, pay,
-        carryOut: balance, wage: r.wage, limit: r.limit, capMin,
+        key, ...periodRange(key), worked, carryIn, available: carryIn + worked, paidMin, carryOut,
+        pay: Math.round(paidMin / 60 * r.wage * 100) / 100,
         earned: Math.round(worked / 60 * r.wage * 100) / 100,
-        freeMin: Math.max(0, capMin - available),
+        wage: r.wage, limit: r.limit, capMin, freeMin: Math.max(0, left), paid, carried,
       });
+      carry = carried;
     }
     return result;
   }
 
-  const api = { DEFAULT_RATES, toMin, entryMinutes, rateFor, addMonth, computeMonths };
+  const api = { DEFAULT_RATES, toMin, entryMinutes, rateFor, addMonth, periodOf, periodRange, computePeriods };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);
